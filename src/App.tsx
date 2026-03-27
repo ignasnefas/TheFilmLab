@@ -83,6 +83,65 @@ const ChevronLeftIcon = () => (
   </svg>
 );
 
+// ─── Overlay / Frame Assets ───────────────────────────────────────────────────
+type OverlayCategory = 'lightleaks' | 'bokeh' | 'textures';
+type BlendMode = 'screen' | 'multiply' | 'overlay' | 'soft-light' | 'normal';
+
+const OVERLAYS: Record<OverlayCategory, { label: string; urls: string[]; thumbs: string[]; defaultBlend: BlendMode }> = {
+  lightleaks: {
+    label: 'Light Leaks',
+    urls: Object.values(import.meta.glob('./overlays/lightleak*.webp', { query: '?url', import: 'default', eager: true }) as Record<string, string>).sort(),
+    thumbs: Object.values(import.meta.glob('./overlays/thumbs/lightleak*.webp', { query: '?url', import: 'default', eager: true }) as Record<string, string>).sort(),
+    defaultBlend: 'screen',
+  },
+  bokeh: {
+    label: 'Bokeh',
+    urls: Object.values(import.meta.glob('./overlays/bokeh*.webp', { query: '?url', import: 'default', eager: true }) as Record<string, string>).sort(),
+    thumbs: Object.values(import.meta.glob('./overlays/thumbs/bokeh*.webp', { query: '?url', import: 'default', eager: true }) as Record<string, string>).sort(),
+    defaultBlend: 'screen',
+  },
+  textures: {
+    label: 'Textures',
+    urls: Object.values(import.meta.glob('./overlays/texture*.webp', { query: '?url', import: 'default', eager: true }) as Record<string, string>).sort(),
+    thumbs: Object.values(import.meta.glob('./overlays/thumbs/texture*.webp', { query: '?url', import: 'default', eager: true }) as Record<string, string>).sort(),
+    defaultBlend: 'multiply',
+  },
+};
+
+const FRAME_URLS = Object.values(
+  import.meta.glob('./frames/*.webp', { query: '?url', import: 'default', eager: true }) as Record<string, string>
+).sort();
+
+const BLEND_MODES: { value: BlendMode; label: string }[] = [
+  { value: 'screen',     label: 'Screen'   },
+  { value: 'multiply',   label: 'Multiply' },
+  { value: 'overlay',    label: 'Overlay'  },
+  { value: 'soft-light', label: 'Soft'     },
+  { value: 'normal',     label: 'Normal'   },
+];
+
+const CANVAS_BLEND: Record<BlendMode, GlobalCompositeOperation> = {
+  screen:      'screen',
+  multiply:    'multiply',
+  overlay:     'overlay',
+  'soft-light':'soft-light',
+  normal:      'source-over',
+};
+
+function drawImageCover(ctx: CanvasRenderingContext2D, img: HTMLImageElement, w: number, h: number) {
+  const imgAR = img.naturalWidth / img.naturalHeight;
+  const canvasAR = w / h;
+  let sx = 0, sy = 0, sw = img.naturalWidth, sh = img.naturalHeight;
+  if (imgAR > canvasAR) {
+    sw = img.naturalHeight * canvasAR;
+    sx = (img.naturalWidth - sw) / 2;
+  } else {
+    sh = img.naturalWidth / canvasAR;
+    sy = (img.naturalHeight - sh) / 2;
+  }
+  ctx.drawImage(img, sx, sy, sw, sh, 0, 0, w, h);
+}
+
 export default function App() {
   const [image, setImage] = useState<HTMLImageElement | null>(null);
   const [imageData, setImageData] = useState<ImageData | null>(null);
@@ -100,6 +159,13 @@ export default function App() {
   const [processTime, setProcessTime] = useState(0);
   const [sidebarOpen, setSidebarOpen] = useState(window.innerWidth >= 768);
   const [isAboutOpen, setIsAboutOpen] = useState(false);
+
+  // Overlay / Frame
+  const [overlayCategory, setOverlayCategory] = useState<OverlayCategory>('lightleaks');
+  const [selectedOverlay, setSelectedOverlay] = useState<string | null>(null);
+  const [overlayOpacity, setOverlayOpacity] = useState(0.6);
+  const [overlayBlend, setOverlayBlend] = useState<BlendMode>('screen');
+  const [selectedFrame, setSelectedFrame] = useState<string | null>(null);
 
   // Override params
   const [grainAmount, setGrainAmount] = useState<number | null>(null);
@@ -125,6 +191,8 @@ export default function App() {
   const splitContainerRef = useRef<HTMLDivElement>(null);
   const processTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const processedCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const overlayImgRef = useRef<HTMLImageElement | null>(null);
+  const frameImgRef = useRef<HTMLImageElement | null>(null);
 
   // Reset overrides when preset changes
   useEffect(() => {
@@ -261,6 +329,21 @@ export default function App() {
     }
   }, [splitView, imageData, processedImageData]);
 
+  // Preload overlay / frame images so they're ready for canvas export
+  useEffect(() => {
+    if (!selectedOverlay) { overlayImgRef.current = null; return; }
+    const img = new Image();
+    img.onload = () => { overlayImgRef.current = img; };
+    img.src = selectedOverlay;
+  }, [selectedOverlay]);
+
+  useEffect(() => {
+    if (!selectedFrame) { frameImgRef.current = null; return; }
+    const img = new Image();
+    img.onload = () => { frameImgRef.current = img; };
+    img.src = selectedFrame;
+  }, [selectedFrame]);
+
   const loadImage = useCallback((img: HTMLImageElement) => {
     // Limit size for performance
     const maxDim = 1600;
@@ -322,28 +405,44 @@ export default function App() {
 
     const sourceCanvas = canvasRef.current;
     const dstCanvas = document.createElement('canvas');
+    const ctx = dstCanvas.getContext('2d');
+    if (!ctx) return;
 
     if (frameColor === 'none') {
       dstCanvas.width = sourceCanvas.width;
       dstCanvas.height = sourceCanvas.height;
-      dstCanvas.getContext('2d')?.drawImage(sourceCanvas, 0, 0);
+      ctx.drawImage(sourceCanvas, 0, 0);
     } else {
       const frameBg = frameColor === 'white' ? '#ffffff' : '#000000';
       const thicknessPx = Math.round((frameThickness / 100) * Math.max(sourceCanvas.width, sourceCanvas.height));
       dstCanvas.width = sourceCanvas.width + thicknessPx * 2;
       dstCanvas.height = sourceCanvas.height + thicknessPx * 2;
-      const ctx = dstCanvas.getContext('2d');
-      if (!ctx) return;
       ctx.fillStyle = frameBg;
       ctx.fillRect(0, 0, dstCanvas.width, dstCanvas.height);
       ctx.drawImage(sourceCanvas, thicknessPx, thicknessPx, sourceCanvas.width, sourceCanvas.height);
+    }
+
+    // Composite overlay
+    if (selectedOverlay && overlayImgRef.current) {
+      ctx.save();
+      ctx.globalAlpha = overlayOpacity;
+      ctx.globalCompositeOperation = CANVAS_BLEND[overlayBlend];
+      drawImageCover(ctx, overlayImgRef.current, dstCanvas.width, dstCanvas.height);
+      ctx.restore();
+    }
+
+    // Composite film frame
+    if (selectedFrame && frameImgRef.current) {
+      ctx.save();
+      drawImageCover(ctx, frameImgRef.current, dstCanvas.width, dstCanvas.height);
+      ctx.restore();
     }
 
     const link = document.createElement('a');
     link.download = `${selectedPreset.brand}-${selectedPreset.name.replace(/\s+/g, '-')}.jpg`;
     link.href = dstCanvas.toDataURL('image/jpeg', 0.95);
     link.click();
-  }, [selectedPreset, frameColor, frameThickness]);
+  }, [selectedPreset, frameColor, frameThickness, selectedOverlay, overlayOpacity, overlayBlend, selectedFrame]);
 
   const handleRerollGrain = useCallback(() => {
     setGrainSeed(Math.floor(Math.random() * 100000));
@@ -610,6 +709,90 @@ export default function App() {
                 defaultValue={selectedPreset.colorShiftY} onChange={setColorShiftY} format={v => `${v > 0 ? '+' : ''}${(v * 100).toFixed(0)}%`} />
             </div>
 
+            {/* Overlays Section */}
+            <div className="px-3 pt-1 pb-1">
+              <SectionHeader title="Overlays" />
+            </div>
+            <div className="px-3 pb-2">
+              {/* Category tabs */}
+              <div className="flex gap-1 mb-2">
+                {(Object.keys(OVERLAYS) as OverlayCategory[]).map(cat => (
+                  <button
+                    key={cat}
+                    onClick={() => setOverlayCategory(cat)}
+                    className={`px-2 py-0.5 rounded text-[10px] font-medium transition-all ${
+                      overlayCategory === cat
+                        ? 'bg-zinc-700 text-zinc-100'
+                        : 'text-zinc-600 hover:text-zinc-300 hover:bg-zinc-800/60'
+                    }`}
+                  >
+                    {OVERLAYS[cat].label}
+                  </button>
+                ))}
+              </div>
+              {/* Thumbnail grid */}
+              <div className="grid grid-cols-5 gap-1">
+                <button
+                  onClick={() => setSelectedOverlay(null)}
+                  className={`aspect-square rounded text-[9px] font-bold flex items-center justify-center transition-all border ${
+                    !selectedOverlay
+                      ? 'bg-zinc-700 text-zinc-100 border-zinc-600'
+                      : 'bg-zinc-800/50 text-zinc-600 hover:text-zinc-300 border-zinc-700/50 hover:border-zinc-500'
+                  }`}
+                >
+                  None
+                </button>
+                {OVERLAYS[overlayCategory].thumbs.map((thumb, i) => {
+                  const url = OVERLAYS[overlayCategory].urls[i];
+                  const isSelected = selectedOverlay === url;
+                  return (
+                    <button
+                      key={url}
+                      onClick={() => {
+                        setSelectedOverlay(url);
+                        if (!isSelected) setOverlayBlend(OVERLAYS[overlayCategory].defaultBlend);
+                      }}
+                      className={`aspect-square rounded overflow-hidden transition-all border ${
+                        isSelected
+                          ? 'border-amber-500 ring-1 ring-amber-500/40'
+                          : 'border-zinc-700/50 hover:border-zinc-500'
+                      }`}
+                    >
+                      <img src={thumb} className="w-full h-full object-cover" alt="" />
+                    </button>
+                  );
+                })}
+              </div>
+              {/* Opacity + blend mode */}
+              {selectedOverlay && (
+                <div className="mt-2 space-y-1.5">
+                  <SliderControl
+                    label="Opacity"
+                    value={overlayOpacity}
+                    min={0} max={1} step={0.01}
+                    defaultValue={0.6}
+                    onChange={(v) => setOverlayOpacity(v ?? 0.6)}
+                    format={(v) => `${Math.round(v * 100)}%`}
+                  />
+                  <div className="flex flex-wrap gap-1">
+                    {BLEND_MODES.map(mode => (
+                      <button
+                        key={mode.value}
+                        onClick={() => setOverlayBlend(mode.value)}
+                        className={`px-1.5 py-0.5 rounded text-[9px] font-medium transition-all ${
+                          overlayBlend === mode.value
+                            ? 'bg-amber-500 text-black'
+                            : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'
+                        }`}
+                      >
+                        {mode.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* Frame Section */}
             <div className="px-3 pt-1 pb-1">
               <SectionHeader title="Frame" />
@@ -642,6 +825,38 @@ export default function App() {
                   format={(v) => `${Math.round(v)}%`}
                 />
               )}
+            </div>
+
+            {/* Film Frame Section */}
+            <div className="px-3 pt-1 pb-1">
+              <SectionHeader title="Film Frame" />
+            </div>
+            <div className="px-3 pb-3">
+              <div className="grid grid-cols-4 gap-1.5">
+                <button
+                  onClick={() => setSelectedFrame(null)}
+                  className={`aspect-[3/2] rounded text-[9px] font-bold flex items-center justify-center transition-all border ${
+                    !selectedFrame
+                      ? 'bg-zinc-700 text-zinc-100 border-zinc-600'
+                      : 'bg-zinc-800/50 text-zinc-600 hover:text-zinc-300 border-zinc-700/50 hover:border-zinc-500'
+                  }`}
+                >
+                  None
+                </button>
+                {FRAME_URLS.map((url, i) => (
+                  <button
+                    key={url}
+                    onClick={() => setSelectedFrame(url)}
+                    className={`aspect-[3/2] rounded overflow-hidden transition-all border ${
+                      selectedFrame === url
+                        ? 'border-amber-500 ring-1 ring-amber-500/40'
+                        : 'border-zinc-700/50 hover:border-zinc-500'
+                    }`}
+                  >
+                    <img src={url} className="w-full h-full object-cover opacity-80" alt={`Frame ${i + 1}`} />
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* Reset */}
@@ -773,6 +988,33 @@ export default function App() {
                 <div className="absolute top-2 right-2 bg-black/60 text-white/80 text-[10px] font-medium px-2 py-0.5 rounded-md backdrop-blur-sm">
                   {selectedPreset.name}
                 </div>
+                {/* Overlay on processed side */}
+                {selectedOverlay && (
+                  <div
+                    className="absolute inset-0 overflow-hidden pointer-events-none"
+                    style={{ clipPath: `inset(0 0 0 ${splitPos}%)` }}
+                  >
+                    <img
+                      src={selectedOverlay}
+                      className="absolute inset-0 w-full h-full"
+                      style={{ objectFit: 'cover', opacity: overlayOpacity, mixBlendMode: overlayBlend }}
+                      alt=""
+                    />
+                  </div>
+                )}
+                {selectedFrame && (
+                  <div
+                    className="absolute inset-0 overflow-hidden pointer-events-none"
+                    style={{ clipPath: `inset(0 0 0 ${splitPos}%)` }}
+                  >
+                    <img
+                      src={selectedFrame}
+                      className="absolute inset-0 w-full h-full"
+                      style={{ objectFit: 'cover' }}
+                      alt=""
+                    />
+                  </div>
+                )}
               </div>
             </div>
           ) : (
@@ -790,13 +1032,31 @@ export default function App() {
                 className="relative flex items-center justify-center max-w-full max-h-full"
                 style={{ backgroundColor: frameBackground, padding: framePadding }}
               >
-                <canvas
-                  ref={canvasRef}
-                  className={`max-w-full max-h-[calc(100vh-52px)] object-contain shadow-2xl ${
-                    showOriginal ? 'opacity-0 pointer-events-none' : 'opacity-100'
-                  }`}
-                  style={{ imageRendering: 'auto' }}
-                />
+                <div className="relative inline-block max-w-full">
+                  <canvas
+                    ref={canvasRef}
+                    className={`block max-w-full max-h-[calc(100vh-52px)] shadow-2xl ${
+                      showOriginal ? 'opacity-0 pointer-events-none' : 'opacity-100'
+                    }`}
+                    style={{ imageRendering: 'auto' }}
+                  />
+                  {!showOriginal && selectedOverlay && (
+                    <img
+                      src={selectedOverlay}
+                      className="absolute inset-0 w-full h-full pointer-events-none"
+                      style={{ objectFit: 'cover', opacity: overlayOpacity, mixBlendMode: overlayBlend }}
+                      alt=""
+                    />
+                  )}
+                  {!showOriginal && selectedFrame && (
+                    <img
+                      src={selectedFrame}
+                      className="absolute inset-0 w-full h-full pointer-events-none"
+                      style={{ objectFit: 'cover' }}
+                      alt=""
+                    />
+                  )}
+                </div>
                 {showOriginal && imageData && <OriginalOverlay imageData={imageData} />}
               </div>
             </div>
