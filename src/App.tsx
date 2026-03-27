@@ -458,7 +458,7 @@ export default function App() {
     if (selectedOverlay && overlayImgRef.current) {
       ctx.save();
       ctx.globalAlpha = overlayOpacity;
-      ctx.globalCompositeOperation = CANVAS_BLEND[overlayBlend];
+      ctx.globalCompositeOperation = CANVAS_BLEND[activeOverlayBlend as BlendMode] || 'source-over';
       drawImageCover(ctx, overlayImgRef.current, dstCanvas.width, dstCanvas.height);
       ctx.restore();
     }
@@ -501,6 +501,9 @@ export default function App() {
   const filteredPresets = filterType === 'all'
     ? filmPresets
     : filmPresets.filter(p => p.type === filterType);
+
+  // Ensure compare uses the currently selected overlay blend mode
+  const activeOverlayBlend = selectedOverlay ? overlayBlend : 'normal';
 
   // Preset navigation handlers
   const currentPresetIndex = filteredPresets.findIndex(p => p.id === selectedPreset.id);
@@ -1088,12 +1091,12 @@ export default function App() {
                 {selectedOverlay && (
                   <div
                     className="absolute inset-0 overflow-hidden pointer-events-none"
-                    style={{ clipPath: `inset(0 0 0 ${splitPos}%)` }}
+                    style={{ clipPath: `inset(0 0 0 ${splitPos}%)`, mixBlendMode: activeOverlayBlend }}
                   >
                     <img
                       src={selectedOverlay}
                       className="absolute inset-0 w-full h-full"
-                      style={{ objectFit: 'cover', opacity: overlayOpacity, mixBlendMode: overlayBlend }}
+                      style={{ objectFit: 'cover', opacity: overlayOpacity, mixBlendMode: activeOverlayBlend }}
                       alt=""
                     />
                   </div>
@@ -1140,7 +1143,7 @@ export default function App() {
                     <img
                       src={selectedOverlay}
                       className="absolute inset-0 w-full h-full pointer-events-none"
-                      style={{ objectFit: 'cover', opacity: overlayOpacity, mixBlendMode: overlayBlend }}
+                      style={{ objectFit: 'cover', opacity: overlayOpacity, mixBlendMode: activeOverlayBlend }}
                       alt=""
                     />
                   )}
